@@ -249,10 +249,12 @@ ISR(TIMER3_COMPA_vect)
         // Pulse increment, step in
         cur_track++;
         PORTD |= _BV(PIN_DIR);
+        _delay_us(10);
         PORTD |= _BV(PIN_STEP);
         set_step(cur_track);
         pulse_delay();
         PORTD &= ~_BV(PIN_STEP);
+        _delay_us(10);
         PORTD &= ~_BV(PIN_DIR);
     }
 
@@ -260,6 +262,7 @@ ISR(TIMER3_COMPA_vect)
         // Pulse decrement, step out
         cur_track--;
         PORTD &= ~_BV(PIN_DIR);
+        _delay_us(10);
         PORTD |= _BV(PIN_STEP);
         set_step(cur_track);
         pulse_delay();
