@@ -418,13 +418,13 @@ void homing_mode()
 
 
 // Options are Home, Align 80 track, Align 40 track, Align 35 track
-char main_menu_table [][2] = {"HO", "A8", "A4", "35"};
+char main_menu_table [][2] = {"HO", "A8", "A7", "A4", "35"};
 
 // Main menu
 void main_menu()
 {
     int8_t val;
-    val = select_menu(main_menu_table, 4);
+    val = select_menu(main_menu_table, 5);
 
     switch(val) {
         default:
@@ -437,9 +437,12 @@ void main_menu()
             align_mode(79);
             break;
         case 2:
-            align_mode(39);
+            align_mode(76);
             break;
         case 3:
+            align_mode(39);
+            break;
+        case 4:
             align_mode(34);
             break;
     }
