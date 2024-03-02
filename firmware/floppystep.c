@@ -124,7 +124,7 @@ void disp_bin(int8_t val)
 {
     char c[10];
     if (val > 99) val = 99;
-//    if (val < -9) val = -9;
+    if (val < -9) val = -9;
     itoa(val, c, 10);
     // Right justify result
     if ((val < 10) && (val > -1)) {
@@ -323,9 +323,11 @@ int8_t select_menu(char menu_array[][2], uint8_t max_items)
             break;
         }
 
-        // What is menu?
+        // Show the menu option
         displaychars[0] = menu_array[menu_selection][0];
         displaychars[1] = menu_array[menu_selection][1];
+
+        // When encoder button is pushed, select the item
         if (!(PINB & _BV(PIN_ENC_BUTTON))) {
             picked = menu_selection;
             break;
@@ -343,40 +345,103 @@ void step_select_menu()
     if (val != -1) step_mode = val;
 }
 
+// Alignment mode
+void align_mode(uint8_t max_track)
+{
+    uint8_t old_wheel = wheel_val;
+    uint8_t prev_wheel = wheel_val;
+    wheel_val = 0;
+    sel_track = 0; // Go to track 0
 
-char main_menu_table [][2] = {"HO"};
+    while (1)
+    {
+        // Check for exit
+        if (menu_button_check()) {
+            wheel_val = old_wheel;
+            return;
+        }
+
+        // Limit wheel position
+        if (wheel_val > 2) {
+            wheel_val = 2;
+        }
+
+        // Check for change
+        if (wheel_val != prev_wheel) {
+            prev_wheel = wheel_val;
+
+            switch (wheel_val) {
+                case 0:
+                default:
+                    sel_track = 0;
+                    break;
+                case 1:
+                    sel_track = max_track >> 1;
+                    break;
+                case 2:
+                    sel_track = max_track;
+                    break;
+            }
+        }
+
+        disp_bin(cur_track);
+        _delay_ms(1);
+    }
+}
+
+// Go find track 0
+void homing_mode()
+{
+    sel_track = -80;
+    _delay_ms(10);
+    while (1) {
+        if (cur_track == sel_track) {
+            // Bumped against hard stop? Regardless, we're done.
+            cur_track = 0;
+            sel_track = 0;
+            wheel_val = 0;
+            return;
+        }
+
+        // Stop early if we hit track0 signal
+        if (!(PIND & _BV(PIN_TRACK0))) {
+            // Track0 pin has asserted
+            cli();
+            sel_track = 0;
+            cur_track = 0;
+            wheel_val = 0;
+            sei();
+            return;
+        }
+    }
+}
+
+
+// Options are Home, Align 80 track, Align 40 track, Align 35 track
+char main_menu_table [][2] = {"HO", "A8", "A4", "35"};
 
 // Main menu
 void main_menu()
 {
     int8_t val;
-    val = select_menu(main_menu_table, 1);
-    if (val == -1) return;
+    val = select_menu(main_menu_table, 4);
 
-    if (val == 0) {
-        // Do homing mode
-        sel_track = -80;
-        _delay_ms(10);
-        while (1) {
-            if (cur_track == sel_track) {
-                // Bumped against hard stop? Regardless, we're done.
-                cur_track = 0;
-                sel_track = 0;
-                wheel_val = 0;
-                return;
-            }
-
-            // Stop early if we hit track0 signal
-            if (!(PIND & _BV(PIN_TRACK0))) {
-                // Track0 pin has asserted
-                cli();
-                sel_track = 0;
-                cur_track = 0;
-                wheel_val = 0;
-                sei();
-                return;
-            }
-        }
+    switch(val) {
+        default:
+        case -1:
+            break;
+        case 0:
+            homing_mode();
+            break;
+        case 1:
+            align_mode(79);
+            break;
+        case 2:
+            align_mode(39);
+            break;
+        case 3:
+            align_mode(34);
+            break;
     }
 }
 
