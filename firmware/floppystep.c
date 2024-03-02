@@ -16,6 +16,9 @@
 #define C_E 1 // PB
 #define C_F 0 // PB
 
+#define PIN_MENU_BUTTON 7 // PB
+#define PIN_ENC_BUTTON 6 // PB
+
 #define C_C 3 // PC
 #define C_G 2 // PC
 #define C_DP 1 // PC
@@ -23,6 +26,8 @@
 
 #define PIN_DIR 0 // PD
 #define PIN_STEP 1 // PD
+#define PIN_TRACK0 2 // PD
+#define PIN_TG43 3 // PD
 
 // Averaging filter for removing ADC noise
 #define FILT_BITS (5)    // Number of fixed point fractional bits
@@ -34,7 +39,7 @@
 #define STEP_MODE_HALF 2
 #define STEP_MODE_15 3 // Step-and-a half mode
 
-uint8_t step_mode;
+uint8_t step_mode = 0;
 
 volatile uint8_t dpoints = 0;
 volatile char displaychars[2];
@@ -59,8 +64,8 @@ volatile uint8_t wheel_val;
 uint8_t wheel_state_old = 0;
 volatile uint16_t blink_counter = 0;
 
-uint8_t sel_track = 0;
-uint8_t cur_track = 0;
+volatile int16_t sel_track = 0;
+volatile int16_t cur_track = 0;
 
 // Puts a digit on the 7-segment display
 void load_digit(uint8_t val, uint8_t anode)
@@ -114,8 +119,8 @@ ISR(TIMER0_COMPA_vect)
 
 }
 
-// Display binary value FIXME: signed
-void disp_bin(uint8_t val)
+// Display binary value
+void disp_bin(int8_t val)
 {
     char c[10];
     if (val > 99) val = 99;
@@ -142,7 +147,7 @@ void adc_set_chan(uint8_t chan)
 ISR(ADC_vect)
 {
     switch (adc_chan) {
-        case 0x6: // Duty cycle
+        case 0x6: // Pulse width
             AVG_FILT(255 - ADCH, val_pw);
             adc_set_chan(0x7);
             val_actual_pw = (GET_AVG(val_pw));
@@ -150,7 +155,7 @@ ISR(ADC_vect)
                 val_actual_pw_old = val_actual_pw;
             }
             break;
-        case 0x7: // Frequency
+        case 0x7: // Pulse rate
             AVG_FILT(255 - ADCH, val_rate);
             adc_set_chan(0xe);
             val_actual_rate = (GET_AVG(val_rate));
@@ -179,7 +184,7 @@ void wheel_decrement()
     if (wheel_val == 255) wheel_val = 0;
 }
 
-// Interrupt on change
+// Interrupt on change for encoder
 ISR(PCINT3_vect)
 {
     uint8_t wheel_state = PINE & 0x3;
@@ -201,6 +206,7 @@ ISR(PCINT3_vect)
     }
 }
 
+// Time that step pulse is active
 void pulse_delay()
 {
     int count;
@@ -226,12 +232,15 @@ void set_step(uint8_t pos)
 // Timer interrupt for pulsing stepper
 ISR(TIMER3_COMPA_vect)
 {
-    uint8_t sel_track_phy;
+    int16_t sel_track_phy;
+    int16_t track43 = 43;
 
     if (step_mode == STEP_MODE_DOUBLE) {
         sel_track_phy = sel_track * 2;
+        track43 = 43 * 2;
     } else if (step_mode == STEP_MODE_15) {
         sel_track_phy = sel_track * 3; // Three half-steps
+        track43 = 43 * 3 / 2;
     } else {
         sel_track_phy = sel_track;
     }
@@ -244,6 +253,7 @@ ISR(TIMER3_COMPA_vect)
         set_step(cur_track);
         pulse_delay();
         PORTD &= ~_BV(PIN_STEP);
+        PORTD &= ~_BV(PIN_DIR);
     }
 
     if (sel_track_phy < cur_track) {
@@ -255,36 +265,119 @@ ISR(TIMER3_COMPA_vect)
         pulse_delay();
         PORTD &= ~_BV(PIN_STEP);
     }
-    // Update from ADC
-    // Nominal val 63 = 8ms.
+
+    // Update step timer from ADC
+
+    // Nominal value of 63 = 8ms, which is a good typical step time
     // Min is 0 >> 2 + 1 = 1 (0.1ms)
     // Max is 127 + 1 = 128 (16ms)
     // Middle scale is 127 >> 2 + 1 = 64
-    OCR3A = (val_actual_rate >> 2) + 1; // FIXME
+
+    // Timer is 0.128ms per bit
+    OCR3A = (val_actual_rate >> 2) + 1;
+
+    // Update TG43 signal
+    if (cur_track >= track43) {
+        PORTD |= _BV(PIN_TG43);
+    } else {
+        PORTD &= ~_BV(PIN_TG43);
+    }
 }
 
-char step_menu[][2] = {"SS", "DS", "HS", "15"};
-
-// Select type of drive
-void step_select_menu()
+// Check debounced state of menu button
+bool menu_button_check()
 {
+    static uint8_t debounce = 0;
+    if (!(PINB & _BV(PIN_MENU_BUTTON))) {
+        if (debounce < 10) {
+            debounce++;
+            if (debounce == 10) {
+                return true;
+            }
+        }
+    } else {
+        debounce = 0;
+    }
+    return false;
+}
+
+// Single step, double step, half step, 1.5x step
+char step_menu_table[][2] = {"SS", "DS", "HS", "15"};
+
+// Menu picker UI
+int8_t select_menu(char menu_array[][2], uint8_t max_items)
+{
+    uint8_t old_wheel = wheel_val;
     uint8_t menu_selection = 0;
+    int8_t picked;
     while (1) {
         menu_selection = wheel_val;
-        if (menu_selection > 3) {
-            menu_selection = 3;
-            wheel_val = 3;
+        if (menu_selection >= max_items) {
+            menu_selection = max_items - 1;
+            wheel_val = max_items - 1;
+        }
+
+        // Hitting menu button again exits the menu
+        if (menu_button_check()) {
+            picked = -1;
+            break;
         }
 
         // What is menu?
-        displaychars[0] = step_menu[menu_selection][0];
-        displaychars[1] = step_menu[menu_selection][1];
-        if (!(PINB & _BV(6))) {
-            step_mode = menu_selection;
+        displaychars[0] = menu_array[menu_selection][0];
+        displaychars[1] = menu_array[menu_selection][1];
+        if (!(PINB & _BV(PIN_ENC_BUTTON))) {
+            picked = menu_selection;
             break;
         }
+        _delay_ms(1);
     }
-    wheel_val = 0;
+    wheel_val = old_wheel;
+    return picked;
+}
+
+// Menu on powerup selects type of step
+void step_select_menu()
+{
+    int8_t val = select_menu(step_menu_table, 4);
+    if (val != -1) step_mode = val;
+}
+
+
+char main_menu_table [][2] = {"HO"};
+
+// Main menu
+void main_menu()
+{
+    int8_t val;
+    val = select_menu(main_menu_table, 1);
+    if (val == -1) return;
+
+    if (val == 0) {
+        // Do homing mode
+        sel_track = -80;
+        _delay_ms(10);
+        while (1) {
+            if (cur_track == sel_track) {
+                // Bumped against hard stop? Regardless, we're done.
+                cur_track = 0;
+                sel_track = 0;
+                wheel_val = 0;
+                return;
+            }
+
+            // Stop early if we hit track0 signal
+            if (!(PIND & _BV(PIN_TRACK0))) {
+                // Track0 pin has asserted
+                cli();
+                sel_track = 0;
+                cur_track = 0;
+                wheel_val = 0;
+                sei();
+                return;
+            }
+        }
+    }
 }
 
 int main (void)
@@ -292,13 +385,13 @@ int main (void)
 
     // Set up IO ports
     DDRD = 0xFB; // Track0 sensor input, all others are outputs
-    PORTD = 0x00;
+    PORTD = 0x04; // Pullup on Track0 input
     DDRB = 0x0F; // Output for LED cathode drivers
     DDRC = 0x3F; // Output for LED cathode and anode drivers
     DDRE = 0x00; // Wheel inputs, ADC inputs
 
     // Setup interrupt on change
-    PCMSK3 = _BV(PCINT25) | _BV(PCINT24);
+    PCMSK3 = _BV(PCINT25) | _BV(PCINT24); // For encoder
     PCICR = _BV(PCIE3);
 
     // Setup display timer
@@ -329,8 +422,6 @@ int main (void)
 
     step_select_menu();
 
-    dpoints = 1;
-
     set_step(0); // Set manual stepper control to phase 0
 
     while (1) {
@@ -357,13 +448,15 @@ int main (void)
         }
 
         // Check for wheel button
-        if (!(PINB & _BV(6)) & blink) {
+        if (!(PINB & _BV(PIN_ENC_BUTTON)) & blink) {
             blink = false;
             sel_track = wheel_val;
         }
 
-        // TODO: Check for menu button
-        // Provide options for zero track seek for PC, Apple II.
+        // Check for menu button
+        if (menu_button_check()) {
+            main_menu();
+        }
 
         _delay_ms(1);
 
