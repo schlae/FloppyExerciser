@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include "segment_font.h"
+
 #define ANODE1 5
 #define ANODE2 4
 #define C_A 3 // PB
@@ -55,19 +57,23 @@ uint8_t digit_table[] = { 0x9F, 0x90, 0x5E, 0xDC,
                           0xDF, 0xDD, 0xDB, 0xC7,
                           0x0F, 0xD6, 0x4F, 0x4B };
 
-uint8_t dpoints = 0;
+
+
+volatile uint8_t dpoints = 0;
+volatile char displaychars[2];
+volatile bool blink = false;
 
 uint8_t adc_chan = 0;
 
 // FIXME all these variables
-uint16_t val_duty = 0;
-uint16_t val_freq = 0;
+uint16_t val_pw = 0;
+uint16_t val_rate = 0;
 volatile uint16_t val_vref = 0;
 uint8_t val_range = 0;
 
-volatile uint16_t val_actual_freq = 0;
-volatile uint16_t val_actual_duty = 0;
-volatile uint16_t val_actual_duty_old = 0;
+volatile uint16_t val_actual_rate = 0;
+volatile uint16_t val_actual_pw = 0;
+volatile uint16_t val_actual_pw_old = 0;
 uint8_t disp_freq = 0;
 uint8_t disp_duty = 0;
 
@@ -82,8 +88,26 @@ uint8_t cur_track = 0;
 // Puts a digit on the 7-segment display
 void load_digit(uint8_t val, uint8_t anode)
 {
-    uint8_t d = ~digit_table[val]; // Invert bits since LED on when 0
+//   AAA       DDD
+//  F   B     C   E
+//   GGG       GGG
+//  E   C     B   F
+//   DDD       AAA
+//              26x1 0345
+// 0000 0000 -> CG.B ADEF
+
+    uint8_t d2 = ~segment_font_table[val]; // Invert bits since LED on when 0
+    uint8_t d;
     uint8_t dpoint;
+
+    // Remap segment font to our GPIO mapping
+    d = (d2 & 0x3) << 3; // Bits 0 and 1
+    d |= (d2 & _BV(2)) << 5; // Bit 2
+    d |= (d2 & _BV(3)) >> 1; // Bit 3
+    d |= (d2 & _BV(4)) >> 3; // Bit 4
+    d |= (d2 & _BV(5)) >> 5; // Bit 5
+    d |= (d2 & _BV(6)); // Bit 6
+    d |= _BV(5); // DP off by default
 
     dpoint = (dpoints >> (anode - 1)) & 1;
 
@@ -91,15 +115,42 @@ void load_digit(uint8_t val, uint8_t anode)
     PORTC = ((anode << 4) | (d >> 4)) & ~(dpoint << 1);
 }
 
-// Hacky binary to BCD converter
-uint8_t bin2bcd(uint8_t val)
+// Timer interrupt for display
+ISR(TIMER0_COMPA_vect)
 {
-    char c[4];
-    itoa(val, c, 10);
-    if (val < 10) {
-        return c[0] - 0x30;
+
+    static uint8_t counter = 0;
+
+    counter++;
+
+    // Should display be blank?
+    if (!blink || (counter & 0x80)) {
+        // Alternate between digits
+        if (PORTC & _BV(5)) {
+            load_digit(displaychars[1], 1);
+        } else {
+            load_digit(displaychars[0], 2);
+        }
     } else {
-        return (c[1] - 0x30) | ((c[0] - 0x30) << 4);
+        load_digit(0, 0);
+    }
+
+}
+
+// Display binary value FIXME: signed
+void disp_bin(uint8_t val)
+{
+    char c[10];
+    if (val > 99) val = 99;
+//    if (val < -9) val = -9;
+    itoa(val, c, 10);
+    // Right justify result
+    if ((val < 10) && (val > -1)) {
+        displaychars[0] = ' ';
+        displaychars[1] = c[0];
+    } else {
+        displaychars[0] = c[0];
+        displaychars[1] = c[1];
     }
 }
 
@@ -115,18 +166,17 @@ ISR(ADC_vect)
 {
     switch (adc_chan) {
         case 0x6: // Duty cycle
-            AVG_FILT(255 - ADCH, val_duty);
+            AVG_FILT(255 - ADCH, val_pw);
             adc_set_chan(0x7);
-            val_actual_duty = (GET_AVG(val_duty));
-            if (val_actual_duty != val_actual_duty_old) {
-                val_actual_duty_old = val_actual_duty;
+            val_actual_pw = (GET_AVG(val_pw));
+            if (val_actual_pw != val_actual_pw_old) {
+                val_actual_pw_old = val_actual_pw;
             }
             break;
         case 0x7: // Frequency
-            AVG_FILT(255 - ADCH, val_freq);
+            AVG_FILT(255 - ADCH, val_rate);
             adc_set_chan(0xe);
-            // Ensure there is no 0, since 0 Hz makes no sense
-            val_actual_freq = ((GET_AVG(val_freq) * 99L) >> 8) + 1;
+            val_actual_rate = (GET_AVG(val_rate));
             break;
         default:
         case 0xe: // Internal bandgap reference voltage
@@ -138,7 +188,7 @@ ISR(ADC_vect)
     ADCSRA |= _BV(ADSC);
 }
 
-void wheel_increment ()
+void wheel_increment()
 {
     blink_counter = 0;
     wheel_val++;
@@ -174,14 +224,19 @@ ISR(PCINT3_vect)
     }
 }
 
+
 // Timer interrupt for pulsing stepper
 ISR(TIMER3_COMPA_vect)
 {
+    int count;
+
         if (sel_track > cur_track) {
             // Pulse increment, step in
             PORTD |= _BV(PIN_DIR);
             PORTD |= _BV(PIN_STEP);
-            _delay_us(100);
+            for (count = 0; count < val_actual_pw; count++) {
+                _delay_us(1);
+            }
             PORTD &= ~_BV(PIN_STEP);
             cur_track++;
         }
@@ -190,17 +245,46 @@ ISR(TIMER3_COMPA_vect)
             // Pulse decrement, step out
             PORTD &= ~_BV(PIN_DIR);
             PORTD |= _BV(PIN_STEP);
-            _delay_us(100);
+            for (count = 0; count < val_actual_pw; count++) {
+                _delay_us(1);
+            }
             PORTD &= ~_BV(PIN_STEP);
             cur_track--;
         }
+    // Update from ADC
+    // Nominal val 63 = 8ms.
+    // Min is 0 >> 2 + 1 = 1 (0.1ms)
+    // Max is 127 + 1 = 128 (16ms)
+    // Middle scale is 127 >> 2 + 1 = 64
+    OCR3A = (val_actual_rate >> 2) + 1; // FIXME
+}
+
+char step_menu[][2] = {"SS", "DS", "HS", "15"};
+
+// Select type of drive
+void step_select_menu()
+{
+    uint8_t menu_selection = 0;
+    while (1) {
+        menu_selection = wheel_val;
+        if (menu_selection > 3) {
+            menu_selection = 3;
+            wheel_val = 3;
+        }
+
+        // What is menu?
+        displaychars[0] = step_menu[menu_selection][0];
+        displaychars[1] = step_menu[menu_selection][1];
+        if (!(PINB & _BV(6))) {
+            //TODO: set step type here.
+            break;
+        }
+    }
+    wheel_val = 0;
 }
 
 int main (void)
 {
-    uint8_t displayval;
-    uint8_t counter = 0;
-    bool blink = false;
 
     // Set up IO ports
     DDRD = 0xFB; // Track0 sensor input, all others are outputs
@@ -213,10 +297,16 @@ int main (void)
     PCMSK3 = _BV(PCINT25) | _BV(PCINT24);
     PCICR = _BV(PCIE3);
 
-    // Setup timer
+    // Setup display timer
+    TCCR0A = _BV(WGM01); // CTC mode
+    TCCR0B = 4; // Divide by 256
+    OCR0A = 32; // 1ms timer
+    TIMSK0 = _BV(OCIE0A); // Interrupt on match
+
+    // Setup step timer
     TCCR3A = 0;
     TCCR3B = _BV(WGM32) | 5; // Divide by 1024.
-    OCR3A = 50; // FIXME
+    OCR3A = 63; // FIXME
     TIMSK3 = _BV(OCIE3A); // Interrupt on compare match
 
     // Setup ADC
@@ -226,10 +316,18 @@ int main (void)
     sei();
     ADCSRA |= _BV(ADSC);
 
+    // Greet string
+    dpoints = 0;
+    displaychars[0] = 'H';
+    displaychars[1] = 'I';
+
+    _delay_ms(700);
+
+    step_select_menu();
+
     dpoints = 1;
 
     while (1) {
-        counter++;
 
         // Selecting a new track
         if (wheel_val != sel_track) {
@@ -237,16 +335,16 @@ int main (void)
                 blink = true;
                 blink_counter = 0;
             }
-            displayval = bin2bcd(wheel_val);
+            disp_bin(wheel_val);
         } else {
             blink = false;
-            displayval = bin2bcd(sel_track);
+            disp_bin(sel_track);
         }
 
         // Check for selection timeout
         if (blink) {
             blink_counter++;
-            if (blink_counter > 1000) {
+            if (blink_counter > 2000) {
                 blink = false;
                 wheel_val = sel_track;
             }
@@ -257,18 +355,8 @@ int main (void)
             sel_track = wheel_val;
         }
 
-        
+        _delay_ms(1);
 
-        // Display
-        if (!blink || (counter & 0x40)) {
-            load_digit(displayval & 0x0F, 1);
-            _delay_ms(1);
-            load_digit(displayval >> 4, 2);
-            _delay_ms(1);
-        } else {
-            load_digit(0, 0);
-            _delay_ms(2);
-        }
     }
     return 0;
 }

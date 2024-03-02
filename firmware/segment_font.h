@@ -1,0 +1,78 @@
+#ifndef __SEGMENT_FONT_H__
+#define __SEGMENT_FONT_H__
+
+/*
+        ====0====
+        |       |
+        5       1
+        |       |
+        |===6===|
+        |       |
+        4       2
+        |       |
+        |===3===|    (7)
+*/
+
+// Based on ASCII, but 0-F are placed at the beginning for convenience
+
+const uint8_t segment_font_table[] = {
+//   0     1     2     3
+   0x3f, 0x06, 0x5b, 0x4f,
+//   4     5     6     7
+   0x66, 0x6d, 0x7d, 0x07,
+//   8     9     A     B
+   0x7f, 0x6f, 0x77, 0x7c,
+//   C     D     E     F
+   0x39, 0x5e, 0x79, 0x71,
+// Next cluster is blank
+   0, 0, 0, 0, 0, 0, 0, 0,
+   0, 0, 0, 0, 0, 0, 0, 0,
+// SP !  "  #  $  %  &  '
+   0, 0, 0, 0, 0, 0, 0, 0,
+//   (     )     *     +
+   0x39, 0x0f, 0x00, 0x00,
+//   ,     -     .     /
+   0x04, 0x40, 0x80, 0x00,
+//   0     1     2     3
+   0x3f, 0x06, 0x5b, 0x4f,
+//   4     5     6     7
+   0x66, 0x6d, 0x7d, 0x07,
+//   8     9     :     ;
+   0x7f, 0x6f,   0,    0,
+// < = > ? @
+   0, 0x48, 0, 0, 0,
+//   A     B     C     D
+   0x77, 0x7c, 0x39, 0x5e,
+//   E     F     G     H
+   0x79, 0x71, 0x3d, 0x76,
+//   I     J     K     L
+   0x30, 0x1e, 0x75, 0x38,
+//   M     N     O     P
+   0x15, 0x54, 0x5c, 0x73,
+//   Q     R     S     T
+   0x67, 0x50, 0x6d, 0x78,
+//   U     V     W     X
+   0x3e, 0x3e, 0x2a, 0x76, // These letters all suck
+//   Y     Z     [     backslash
+   0x6e, 0x5b, 0x30, 0x06,
+//   ]     ^     _     `
+   0x06, 0x01, 0x08, 0x20,
+//   a     b     c     d
+   0x77, 0x7c, 0x39, 0x5e,
+//   e     f     g     h
+   0x79, 0x71, 0x3d, 0x76,
+//   i     j     k     l
+   0x30, 0x1e, 0x75, 0x38,
+//   m     n     o     p
+   0x15, 0x54, 0x5c, 0x73,
+//   q     r     s     t
+   0x67, 0x50, 0x6d, 0x78,
+//   u     v     w     x
+   0x3e, 0x3e, 0x2a, 0x76, // These letters all suck
+//   y     z     {     |
+   0x6e, 0x5b, 0x39, 0x30,
+//   }     ~    DEL
+   0x0f, 0x40, 0x00
+};
+
+#endif
