@@ -29,35 +29,12 @@
 #define AVG_FILT(input, output)  output = (output - (output >> FILT_BITS) + (input))
 #define GET_AVG(v) ((v + _BV(FILT_BITS) / 2) >> FILT_BITS) // Rounds up
 
-//   AAA       DDD
-//  F   B     C   E
-//   GGG       GGG
-//  E   C     B   F
-//   DDD       AAA
-// 0000 0000 -> CG.B ADEF
-// 0 = 1001 1111
-// 1 = 1001 0000
-// 2 = 0101 1110
-// 3 = 1101 1100
-// 4 = 1101 0001
-// 5 = 1100 1101
-// 6 = 1100 1111
-// 7 = 1001 1000
-// 8 = 1101 1111
-// 9 = 1101 1101
-// A = 1101 1011
-// B = 1100 0111
-// C = 0000 1111
-// D = 1101 0110
-// E = 0100 1111
-// F = 0100 1011
+#define STEP_MODE_WHOLE 0
+#define STEP_MODE_DOUBLE 1
+#define STEP_MODE_HALF 2
+#define STEP_MODE_15 3 // Step-and-a half mode
 
-uint8_t digit_table[] = { 0x9F, 0x90, 0x5E, 0xDC,
-                          0xD1, 0xCD, 0xCF, 0x98,
-                          0xDF, 0xDD, 0xDB, 0xC7,
-                          0x0F, 0xD6, 0x4F, 0x4B };
-
-
+uint8_t step_mode;
 
 volatile uint8_t dpoints = 0;
 volatile char displaychars[2];
@@ -224,33 +201,60 @@ ISR(PCINT3_vect)
     }
 }
 
+void pulse_delay()
+{
+    int count;
+    for (count = 0; count < val_actual_pw; count++) {
+        _delay_us(1);
+    }
+}
+
+uint8_t a2_step_table_single[] = {1, 2, 4, 8, 1, 2, 4, 8};
+uint8_t a2_step_table_half[] = {1, 3, 2, 6, 4, 12, 8, 9};
+
+// Sets manual stepper pins to specified position
+void set_step(uint8_t pos)
+{
+    PORTD &= 0x0F; // MS nybble is our stepper drive
+    if ((step_mode == STEP_MODE_HALF) || (step_mode == STEP_MODE_15)) {
+        PORTD |= (a2_step_table_half[pos & 0x7]) << 4;
+    } else {
+        PORTD |= (a2_step_table_single[pos & 0x7]) << 4;
+    }
+}
 
 // Timer interrupt for pulsing stepper
 ISR(TIMER3_COMPA_vect)
 {
-    int count;
+    uint8_t sel_track_phy;
 
-        if (sel_track > cur_track) {
-            // Pulse increment, step in
-            PORTD |= _BV(PIN_DIR);
-            PORTD |= _BV(PIN_STEP);
-            for (count = 0; count < val_actual_pw; count++) {
-                _delay_us(1);
-            }
-            PORTD &= ~_BV(PIN_STEP);
-            cur_track++;
-        }
+    if (step_mode == STEP_MODE_DOUBLE) {
+        sel_track_phy = sel_track * 2;
+    } else if (step_mode == STEP_MODE_15) {
+        sel_track_phy = sel_track * 3; // Three half-steps
+    } else {
+        sel_track_phy = sel_track;
+    }
 
-        if (sel_track < cur_track) {
-            // Pulse decrement, step out
-            PORTD &= ~_BV(PIN_DIR);
-            PORTD |= _BV(PIN_STEP);
-            for (count = 0; count < val_actual_pw; count++) {
-                _delay_us(1);
-            }
-            PORTD &= ~_BV(PIN_STEP);
-            cur_track--;
-        }
+    if (sel_track_phy > cur_track) {
+        // Pulse increment, step in
+        cur_track++;
+        PORTD |= _BV(PIN_DIR);
+        PORTD |= _BV(PIN_STEP);
+        set_step(cur_track);
+        pulse_delay();
+        PORTD &= ~_BV(PIN_STEP);
+    }
+
+    if (sel_track_phy < cur_track) {
+        // Pulse decrement, step out
+        cur_track--;
+        PORTD &= ~_BV(PIN_DIR);
+        PORTD |= _BV(PIN_STEP);
+        set_step(cur_track);
+        pulse_delay();
+        PORTD &= ~_BV(PIN_STEP);
+    }
     // Update from ADC
     // Nominal val 63 = 8ms.
     // Min is 0 >> 2 + 1 = 1 (0.1ms)
@@ -276,7 +280,7 @@ void step_select_menu()
         displaychars[0] = step_menu[menu_selection][0];
         displaychars[1] = step_menu[menu_selection][1];
         if (!(PINB & _BV(6))) {
-            //TODO: set step type here.
+            step_mode = menu_selection;
             break;
         }
     }
@@ -306,7 +310,7 @@ int main (void)
     // Setup step timer
     TCCR3A = 0;
     TCCR3B = _BV(WGM32) | 5; // Divide by 1024.
-    OCR3A = 63; // FIXME
+    OCR3A = 63;
     TIMSK3 = _BV(OCIE3A); // Interrupt on compare match
 
     // Setup ADC
@@ -326,6 +330,8 @@ int main (void)
     step_select_menu();
 
     dpoints = 1;
+
+    set_step(0); // Set manual stepper control to phase 0
 
     while (1) {
 
@@ -350,10 +356,14 @@ int main (void)
             }
         }
 
+        // Check for wheel button
         if (!(PINB & _BV(6)) & blink) {
             blink = false;
             sel_track = wheel_val;
         }
+
+        // TODO: Check for menu button
+        // Provide options for zero track seek for PC, Apple II.
 
         _delay_ms(1);
 
