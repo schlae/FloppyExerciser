@@ -47,7 +47,6 @@ volatile bool blink = false;
 
 uint8_t adc_chan = 0;
 
-// FIXME all these variables
 uint16_t val_pw = 0;
 uint16_t val_rate = 0;
 volatile uint16_t val_vref = 0;
@@ -60,7 +59,7 @@ uint8_t disp_freq = 0;
 uint8_t disp_duty = 0;
 
 // Wheel tracking state
-volatile uint8_t wheel_val;
+volatile int16_t wheel_val;
 uint8_t wheel_state_old = 0;
 volatile uint16_t blink_counter = 0;
 
@@ -120,19 +119,25 @@ ISR(TIMER0_COMPA_vect)
 }
 
 // Display binary value
-void disp_bin(int8_t val)
+void disp_bin(int16_t val)
 {
     char c[10];
-    if (val > 99) val = 99;
+    if (val > 199) val = 199;
     if (val < -9) val = -9;
     itoa(val, c, 10);
     // Right justify result
     if ((val < 10) && (val > -1)) {
         displaychars[0] = ' ';
         displaychars[1] = c[0];
+        dpoints &= ~_BV(1);
+    } else if (val >= 100) {
+        displaychars[0] = c[1];
+        displaychars[1] = c[2];
+        dpoints |= _BV(1); // This is our hundreds digit
     } else {
         displaychars[0] = c[0];
         displaychars[1] = c[1];
+        dpoints &= ~_BV(1);
     }
 }
 
@@ -174,14 +179,14 @@ void wheel_increment()
 {
     blink_counter = 0;
     wheel_val++;
-    if (wheel_val > 99) wheel_val = 99;
+    if (wheel_val > 199) wheel_val = 199;
 }
 
 void wheel_decrement()
 {
     blink_counter = 0;
     wheel_val--;
-    if (wheel_val == 255) wheel_val = 0;
+    if (wheel_val < -9) wheel_val = -9;
 }
 
 // Interrupt on change for encoder
@@ -310,14 +315,19 @@ char step_menu_table[][2] = {"SS", "DS", "HS", "15"};
 // Menu picker UI
 int8_t select_menu(char menu_array[][2], uint8_t max_items)
 {
-    uint8_t old_wheel = wheel_val;
-    uint8_t menu_selection = 0;
+    int16_t old_wheel = wheel_val;
+    int8_t menu_selection = 0;
     int8_t picked;
     while (1) {
         menu_selection = wheel_val;
         if (menu_selection >= max_items) {
             menu_selection = max_items - 1;
             wheel_val = max_items - 1;
+        }
+
+        if (menu_selection < 0) {
+            menu_selection = 0;
+            wheel_val = 0;
         }
 
         // Hitting menu button again exits the menu
@@ -351,8 +361,8 @@ void step_select_menu()
 // Alignment mode
 void align_mode(uint8_t max_track)
 {
-    uint8_t old_wheel = wheel_val;
-    uint8_t prev_wheel = wheel_val;
+    int16_t old_wheel = wheel_val;
+    int16_t prev_wheel = wheel_val;
     wheel_val = 0;
     sel_track = 0; // Go to track 0
 
@@ -367,6 +377,9 @@ void align_mode(uint8_t max_track)
         // Limit wheel position
         if (wheel_val > 2) {
             wheel_val = 2;
+        }
+        if (wheel_val < 0) {
+            wheel_val = 0;
         }
 
         // Check for change
