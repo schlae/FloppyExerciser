@@ -64,8 +64,14 @@
       39,
       40
     ],
-    "visible_layers": "ffc3f20_7fffffff",
+    "visible_layers": "ffc3f20_fffffffe",
     "zone_display_mode": 0
+  },
+  "git": {
+    "repo_password": "",
+    "repo_type": "",
+    "repo_username": "",
+    "ssh_key": ""
   },
   "meta": {
     "filename": "FloppyExerciser.kicad_prl",
