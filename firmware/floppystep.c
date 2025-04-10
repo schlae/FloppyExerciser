@@ -276,13 +276,14 @@ ISR(TIMER3_COMPA_vect)
 
     // Update step timer from ADC
 
-    // Nominal value of 63 = 8ms, which is a good typical step time
-    // Min is 0 >> 2 + 1 = 1 (0.1ms)
-    // Max is 127 + 1 = 128 (16ms)
-    // Middle scale is 127 >> 2 + 1 = 64
+    // Nominal value of 128 = 16ms, which is a good typical step time
+    // (if a bit slow).
+    // Min is 0 >> 1 + 1 = 1 (0.1ms)
+    // Max is 255 >> 1 + 1 = 128 (16ms)
+    // Middle scale is 127 >> 1 + 1 = 64 (8ms)
 
     // Timer is 0.128ms per bit
-    OCR3A = (val_actual_rate >> 2) + 1;
+    OCR3A = (val_actual_rate >> 1) + 1;
 
     // Update TG43 signal
     if (cur_track >= track43) {
